@@ -10,6 +10,16 @@ import "sort"
 // `public`, `privileged`).
 type Class string
 
+// Seed classes recognised by the runtime even when the YAML doesn't
+// declare a `taints.classes` block. Exported so callers in
+// pkg/runtime and the eventual CLI never refer to them by string
+// literal.
+const (
+	ClassSecret     Class = "secret"
+	ClassPublic     Class = "public"
+	ClassPrivileged Class = "privileged"
+)
+
 // Label is a set of taint classes attached to a message, a tool
 // result, or carried as the active set on a session. Labels are
 // immutable: every mutator returns a new value.

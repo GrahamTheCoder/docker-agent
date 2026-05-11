@@ -17,16 +17,26 @@ must provide to the runtime.
 
 - `class.go` — the class vocabulary. A `Class` is a string identifier;
   a `Label` is the set-of-classes attached to a message or tool result.
+  Exports `ClassSecret` / `ClassPublic` / `ClassPrivileged` so callers
+  never have to refer to the seed names by string literal.
 - `state.go` — the per-session live state: which classes are currently
   active, which message introduced each one, which introducer messages
   have been cleared by the user. Exposes `Propagate(reads) Label` and
-  `Decide(reads, writes) Decision` so the runtime can call into it from
-  exactly two places (post-tool labelling and pre-tool enforcement).
-- `policy.go` — the forbid matrix evaluator. Stateless given a snapshot
-  of the active set and a tool's declared write classes.
+  `Decide(active, writes) Decision`. A node clears transitively iff
+  its taint came *solely* from the cleared chain (own reads empty AND
+  every inherited class came only from cleared introducers); a node
+  with independent reads or a surviving alternate introducer is left
+  alone. Not safe for concurrent use — the runtime serialises tool
+  calls per session.
+- `policy.go` — the forbid matrix evaluator. Stateless given a
+  snapshot of the active set and a tool's declared write classes.
+  Returns every triggered rule index so audit consumers can render
+  the full reason.
 - `classifier.go` — given a tool name and its arguments, returns the
   effective read and write classes. Built from the per-toolset YAML
-  declarations plus the path/env/url tag tables.
+  declarations plus the path/url tag tables. Per-toolset declarations
+  are unioned (never overriding) so a YAML widening cannot
+  accidentally undo a tightening.
 
 ### Contract with the runtime
 
@@ -62,3 +72,12 @@ following `docs/design/taint-tracking.md`:
 - A min-cut helper for "smallest set of clearances to unblock a
   denied call" once the prior phases have real session data to test
   on.
+- The built-in classifier defaults for `fetch` / `shell` / `read_file`
+  / `write_file` / `edit_file` are baked into the Go switch. The
+  design contemplates them as YAML-overridable defaults; today
+  per-toolset declarations can only union with them, never replace.
+  Move them to a data-driven table once a real workload demands the
+  override.
+- `taints.tags.env` is parsed in the YAML schema but not consumed by
+  the classifier. Wire it in alongside a `shell` env-derived read set
+  when the runtime gains shell-env classification.

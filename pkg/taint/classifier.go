@@ -5,13 +5,16 @@ import (
 	"strings"
 )
 
-// ClassifierConfig drives the tool classifier. The PathTags / EnvTags
-// / URLTags lists are walked in order; every matching rule unions
-// into the result. ToolsetTaints maps an opaque toolset id to the
-// declarations from that toolset's `taints:` block.
+// ClassifierConfig drives the tool classifier. The tag lists are
+// walked in order; every matching rule unions into the result.
+// ToolsetTaints maps an opaque toolset id to the declarations from
+// that toolset's `taints:` block.
+//
+// EnvTags from the YAML schema are not consumed yet — once shell
+// receives env-derived classification (the design's `env` sentinel),
+// add an EnvTags field here and a `shell` case below.
 type ClassifierConfig struct {
 	PathTags []TagRule
-	EnvTags  []TagRule
 	URLTags  []TagRule
 
 	// ToolsetTaints associates a toolset declaration with the tools
@@ -77,9 +80,9 @@ func (c *Classifier) Classify(tool string, args map[string]any) (reads, writes L
 			writes = writes.Union(t)
 		}
 	case "shell":
-		writes = writes.With("privileged")
+		writes = writes.With(ClassPrivileged)
 	case "write_file", "edit_file":
-		writes = writes.With("privileged")
+		writes = writes.With(ClassPrivileged)
 		if path, ok := stringArg(args, "path"); ok {
 			writes = writes.Union(c.matchTags(c.cfg.PathTags, path))
 		}

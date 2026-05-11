@@ -81,6 +81,21 @@ func TestPolicy_MultipleRulesORed(t *testing.T) {
 	assert.Contains(t, d.Reason, "privileged")
 }
 
+// Unit: when several rules fire, Decide names them all in Triggered
+// so audit consumers can render the full reason.
+func TestPolicy_AllFiringRulesReportedInTriggered(t *testing.T) {
+	t.Parallel()
+
+	p := taint.NewPolicy([]taint.ForbidRule{
+		{When: taint.NewLabel("secret"), Writes: taint.NewLabel("public")},
+		{When: taint.NewLabel("secret"), Writes: taint.NewLabel("external")},
+	})
+
+	d := p.Decide(taint.NewLabel("secret"), taint.NewLabel("public", "external"))
+	require.False(t, d.Allowed)
+	assert.Equal(t, []int{0, 1}, d.Triggered)
+}
+
 // Unit: a tool that writes to nothing is always allowed regardless of
 // the active set (read-only tool semantics).
 func TestPolicy_PureReadAllowed(t *testing.T) {
