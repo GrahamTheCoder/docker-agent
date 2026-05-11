@@ -47,16 +47,18 @@ classifier's behaviour. This package does not parse YAML directly.
 
 ### Drift
 
-Not yet implemented. Phase rollout from
-`docs/design/taint-tracking.md`:
+Runtime is not yet calling into this package. The remaining work,
+following `docs/design/taint-tracking.md`:
 
-- Phase 1 (in progress): config schema additions in
-  `pkg/config/latest`; no runtime behaviour change. This package is
-  bootstrapping its own types in parallel so Phase 2 has somewhere to
-  land.
-- Phase 2: `class.go`, `state.go`, `policy.go`, `classifier.go` here
-  with unit tests covering sticky propagation, clearance closure, and
-  the deny matrix.
-- Phase 3: one new branch in `executeWithApproval`.
-- Phase 4: `docker agent taint show|clear` CLI + TUI + git-backed log.
-- Phase 5: min-cut helper for "smallest set of clearances to unblock".
+- One new branch in `pkg/runtime/tool_dispatch.go:executeWithApproval`
+  that builds a `Classifier` from `Config.Taints` + `Toolset.Taints`
+  on session start, threads a `*State` per session, and consults
+  `State.Decide` between the team-permissions check and the
+  read-only-hint shortcut. Post-tool, calls `State.Propagate` to stamp
+  the resulting `session.Message`.
+- `Message.Taint *Label` and `Message.TaintOrigin []string` on
+  `pkg/session/session.go`, persisted with the session.
+- `docker agent taint show|clear` CLI + TUI + git-backed audit log.
+- A min-cut helper for "smallest set of clearances to unblock a
+  denied call" once the prior phases have real session data to test
+  on.
