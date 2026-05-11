@@ -98,6 +98,40 @@ func TestState_ClearOneOfManyIntroducersKeepsClass(t *testing.T) {
 	assert.Equal(t, []string{"intro-a"}, cleared)
 }
 
+// Unit: a downstream inheritor of TWO independent introducers must
+// NOT clear when only one is cleared. This is the spec's "downstream
+// that derived its taint solely from the cleared introducer also
+// clears" property — solely is the operative word.
+func TestState_ClearKeepsInheritorWithSurvivingSource(t *testing.T) {
+	t.Parallel()
+
+	s := taint.NewState(newTestPolicy())
+	s.Propagate("intro-secret", taint.NewLabel("secret"))
+	s.Propagate("intro-public", taint.NewLabel("public"))
+	s.Propagate("inheritor", taint.NewLabel()) // inherits both
+
+	cleared := s.Clear("intro-secret")
+
+	assert.Equal(t, []string{"intro-secret"}, cleared,
+		"only intro-secret should clear; inheritor still derives 'public' from intro-public")
+	assert.Equal(t, []taint.Class{"public"}, s.Active().Classes())
+}
+
+// Unit: a downstream node that independently introduced a class must
+// not clear when an unrelated upstream introducer is cleared.
+func TestState_ClearKeepsNodeWithIndependentReads(t *testing.T) {
+	t.Parallel()
+
+	s := taint.NewState(newTestPolicy())
+	s.Propagate("intro-secret", taint.NewLabel("secret"))
+	s.Propagate("indep", taint.NewLabel("public")) // own contribution
+
+	cleared := s.Clear("intro-secret")
+
+	assert.Equal(t, []string{"intro-secret"}, cleared)
+	assert.Equal(t, []taint.Class{"public"}, s.Active().Classes())
+}
+
 // Unit: clearing an unknown message id is a no-op and reports nothing.
 func TestState_ClearUnknownIsNoOp(t *testing.T) {
 	t.Parallel()
