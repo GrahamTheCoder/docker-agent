@@ -87,10 +87,13 @@ func (s *State) Introducers(c Class) []string {
 	return ids
 }
 
-// Clear marks the given message id as cleared, transitively clears
-// every later node whose effective label shrank as a result, and
-// returns the ids of all newly cleared nodes in chronological order.
-// Returns nil if id is unknown or already cleared.
+// Clear marks the given message id as cleared and transitively
+// clears every later node whose taint was derived *solely* from the
+// cleared chain — i.e. whose effective label drops to empty once the
+// cleared nodes are excluded. A node with its own independent reads,
+// or one that still inherits from a surviving introducer, is left
+// alone. Returns the ids of all newly cleared nodes in chronological
+// order, or nil if id is unknown or already cleared.
 func (s *State) Clear(id string) []string {
 	idx := s.indexOf(id)
 	if idx < 0 || s.nodes[idx].cleared {
@@ -103,7 +106,7 @@ func (s *State) Clear(id string) []string {
 		if s.nodes[i].cleared {
 			continue
 		}
-		if s.effectiveLabelAt(i, ignoreClears).Subset(s.effectiveLabelAt(i, respectClears)) {
+		if s.effectiveLabelAt(i).Len() > 0 {
 			continue
 		}
 		s.nodes[i].cleared = true
@@ -112,19 +115,13 @@ func (s *State) Clear(id string) []string {
 	return cleared
 }
 
-const (
-	respectClears = true
-	ignoreClears  = false
-)
-
-// effectiveLabelAt returns the label this node carries: its own reads
-// plus the active set at its position. When respect is false the
-// active set is computed as if nothing were cleared, which is what
-// Clear compares against to detect shrinkage.
-func (s *State) effectiveLabelAt(i int, respect bool) Label {
+// effectiveLabelAt returns the label this node carries with the
+// current cleared flags respected: its own reads plus the union of
+// every uncleared earlier node's reads.
+func (s *State) effectiveLabelAt(i int) Label {
 	var l Label
 	for j := 0; j < i; j++ {
-		if respect && s.nodes[j].cleared {
+		if s.nodes[j].cleared {
 			continue
 		}
 		l = l.Union(s.nodes[j].reads)
