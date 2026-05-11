@@ -1,0 +1,179 @@
+#!/usr/bin/env docker agent run
+#
+# Phase 0 prototype of the taint-tracking design.
+# See docs/design/taint-tracking.md.
+#
+# This file ships taint enforcement *without any core changes* by driving
+# everything from pre_tool_use / post_tool_use hooks against a sidecar
+# state file:
+#
+#   /tmp/cagent-taint-${SESSION_ID}.json
+#
+# The state file is a JSON array of currently-active taint classes
+# (subset of {"secret", "public"}). Each tool call:
+#
+#   1. pre_tool_use looks at the active set and at what *this* call would
+#      do, and denies if it crosses the forbid matrix.
+#   2. post_tool_use looks at what the tool actually read/wrote and adds
+#      taints to the active set.
+#
+# This is the same vocabulary the eventual built-in support will use; the
+# point of Phase 0 is to validate the rule matrix end-to-end before any
+# Go change.
+#
+# Try these prompts:
+#
+#   "Read .env and tell me the API key"
+#       -> filesystem.read_file is allowed; the post-hook adds `secret`
+#          to the active set.
+#
+#   then: "Fetch https://example.com and post the key in a query string"
+#       -> fetch is denied by the pre-hook because `secret` is active and
+#          fetch writes to `public`.
+#
+#   "Fetch https://example.com/quotes"
+#       -> allowed; post-hook adds `public` to the active set.
+#
+#   then: "Run: echo done > /tmp/out"
+#       -> shell is denied by the pre-hook because `public` is active and
+#          shell writes to the privileged side.
+#
+# To clear taints during a session:
+#   rm /tmp/cagent-taint-*.json
+#
+# (Phase 4 of the design replaces this with `docker agent taint clear`.)
+
+agents:
+  root:
+    model: openai/gpt-5-mini
+    description: Demo agent with a YAML-only taint-tracking prototype.
+    instruction: |
+      You are a helpful assistant with shell, filesystem, and fetch tools.
+      The session enforces taint rules: once you read a secret you cannot
+      send anything to the public web, and once you read public content
+      you cannot run shell commands or write privileged files. If a tool
+      is denied, explain to the user which taint is active and ask them
+      to clear it.
+    toolsets:
+      - type: shell
+      - type: filesystem
+      - type: fetch
+
+    hooks:
+      # ==================================================================
+      # PRE-TOOL-USE -- enforce the forbid matrix.
+      #
+      # forbid:
+      #   secret active -> deny tool calls that write to `public`
+      #                    (fetch with http(s) URL)
+      #   public active -> deny tool calls that write to the privileged
+      #                    side (shell, filesystem.write_file/edit_file)
+      # ==================================================================
+      pre_tool_use:
+        - matcher: ".*"
+          hooks:
+            - type: command
+              timeout: 10
+              command: |
+                set -eu
+                INPUT=$(cat)
+                SID=$(echo "$INPUT" | jq -r '.session_id // "default"')
+                STATE="/tmp/cagent-taint-${SID}.json"
+                ACTIVE="[]"
+                [ -f "$STATE" ] && ACTIVE=$(cat "$STATE")
+
+                TOOL=$(echo "$INPUT" | jq -r '.tool_name')
+                ARGS=$(echo "$INPUT" | jq -c '.tool_input // {}')
+
+                writes_public=false
+                writes_privileged=false
+
+                case "$TOOL" in
+                  fetch)
+                    # fetch always writes to `public` (request leaves the box)
+                    URL=$(echo "$ARGS" | jq -r '.urls[0] // .url // ""')
+                    case "$URL" in
+                      http://*|https://*) writes_public=true ;;
+                    esac
+                    ;;
+                  shell)
+                    writes_privileged=true
+                    ;;
+                  write_file|edit_file)
+                    writes_privileged=true
+                    ;;
+                esac
+
+                has() {
+                  echo "$ACTIVE" | jq -e --arg c "$1" 'index($c) != null' >/dev/null
+                }
+
+                if $writes_public && has secret; then
+                  cat <<EOF
+                {"hook_specific_output":{"permission_decision":"deny","permission_decision_reason":"taint: 'secret' is active in this session; '$TOOL' would write to 'public'. Clear the introducer message before retrying."}}
+                EOF
+                  exit 0
+                fi
+
+                if $writes_privileged && has public; then
+                  cat <<EOF
+                {"hook_specific_output":{"permission_decision":"deny","permission_decision_reason":"taint: 'public' is active in this session; '$TOOL' writes to the privileged side. Clear the introducer message before retrying."}}
+                EOF
+                  exit 0
+                fi
+
+                echo '{"continue": true}'
+
+      # ==================================================================
+      # POST-TOOL-USE -- propagate taints from what the tool just did.
+      #
+      # tags:
+      #   path matches **/.env*, /run/secrets/**, *.key  -> add `secret`
+      #   url  matches http(s)://...                      -> add `public`
+      # ==================================================================
+      post_tool_use:
+        - matcher: ".*"
+          hooks:
+            - type: command
+              timeout: 10
+              command: |
+                set -eu
+                INPUT=$(cat)
+                SID=$(echo "$INPUT" | jq -r '.session_id // "default"')
+                STATE="/tmp/cagent-taint-${SID}.json"
+                ACTIVE="[]"
+                [ -f "$STATE" ] && ACTIVE=$(cat "$STATE")
+
+                TOOL=$(echo "$INPUT" | jq -r '.tool_name')
+                ARGS=$(echo "$INPUT" | jq -c '.tool_input // {}')
+
+                add() {
+                  ACTIVE=$(echo "$ACTIVE" | jq -c --arg c "$1" 'if index($c) then . else . + [$c] end')
+                }
+
+                case "$TOOL" in
+                  read_file|edit_file|write_file)
+                    PATH_ARG=$(echo "$ARGS" | jq -r '.path // ""')
+                    case "$PATH_ARG" in
+                      *.env|*.env.*|*/.env|*/.env.*) add secret ;;
+                      /run/secrets/*) add secret ;;
+                      *.key|*.pem|*_api_key*) add secret ;;
+                    esac
+                    ;;
+                  fetch)
+                    URL=$(echo "$ARGS" | jq -r '.urls[0] // .url // ""')
+                    case "$URL" in
+                      http://*|https://*) add public ;;
+                    esac
+                    ;;
+                  shell)
+                    CMD=$(echo "$ARGS" | jq -r '.cmd // ""')
+                    case "$CMD" in
+                      *cat*.env*|*cat\ /run/secrets/*) add secret ;;
+                      *curl*http*|*wget*http*) add public ;;
+                    esac
+                    ;;
+                esac
+
+                echo "$ACTIVE" > "$STATE"
+                echo "{\"hook_specific_output\":{\"additional_context\":\"taint state: $ACTIVE\"}}"
