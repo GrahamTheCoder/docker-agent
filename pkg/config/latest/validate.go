@@ -19,6 +19,11 @@ func (t *Config) UnmarshalYAML(unmarshal func(any) error) error {
 }
 
 func (t *Config) validate() error {
+	knownClasses := (&TaintConfig{}).knownClasses()
+	if t.Taints != nil {
+		knownClasses = t.Taints.knownClasses()
+	}
+
 	for i := range t.Agents {
 		agent := &t.Agents[i]
 
@@ -29,6 +34,9 @@ func (t *Config) validate() error {
 
 		for j := range agent.Toolsets {
 			if err := agent.Toolsets[j].validate(); err != nil {
+				return err
+			}
+			if err := agent.Toolsets[j].Taints.validateAgainstClasses(knownClasses); err != nil {
 				return err
 			}
 		}

@@ -73,6 +73,10 @@
     "permissions": {
       "$ref": "#/definitions/PermissionsConfig",
       "description": "Tool permission configuration for controlling tool approval behavior"
+    },
+    "taints": {
+      "$ref": "#/definitions/TaintConfig",
+      "description": "Information-flow taint tracking: declares classes, the forbid matrix, and the path/env/url tag tables that drive automatic taint introduction. See docs/design/taint-tracking.md."
     }
   },
   "additionalProperties": false,
@@ -852,6 +856,116 @@
       },
       "additionalProperties": false
     },
+    "TaintConfig": {
+      "type": "object",
+      "description": "Information-flow taint tracking. Declares the taint class vocabulary, the forbid matrix that turns active classes into hard-deny verdicts, and the path/env/url tag tables that drive automatic taint introduction. See docs/design/taint-tracking.md.",
+      "properties": {
+        "classes": {
+          "type": "object",
+          "description": "Map of recognised taint class names. When empty, two seed classes ('secret', 'public') are defaulted; declaring any class disables defaulting.",
+          "additionalProperties": {
+            "$ref": "#/definitions/TaintClass"
+          }
+        },
+        "forbid": {
+          "type": "array",
+          "description": "Forbid matrix. A rule denies a tool call when every class in `when.active` is currently active AND any class in `tool_writes_to` appears in the tool's declared write set.",
+          "items": {
+            "$ref": "#/definitions/ForbidRule"
+          }
+        },
+        "tags": {
+          "$ref": "#/definitions/TaintTags",
+          "description": "Tag tables that map tool argument shapes (paths, env vars, URLs) onto the classes they introduce."
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaintClass": {
+      "type": "object",
+      "description": "A single taint class definition. The runtime treats class names as opaque identifiers; the description is for human reviewers.",
+      "properties": {
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ForbidRule": {
+      "type": "object",
+      "required": ["when", "tool_writes_to"],
+      "properties": {
+        "when": {
+          "$ref": "#/definitions/ForbidWhen"
+        },
+        "tool_writes_to": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Class names that, if present in the tool's declared write set, trigger the deny."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ForbidWhen": {
+      "type": "object",
+      "required": ["active"],
+      "properties": {
+        "active": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Class names that must all be currently active for the rule to fire."
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaintTags": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TaintTagRule" },
+          "description": "Path glob to taint-class mappings (applied to filesystem read/write/edit tool arguments)."
+        },
+        "env": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TaintTagRule" },
+          "description": "Environment variable glob to taint-class mappings."
+        },
+        "urls": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TaintTagRule" },
+          "description": "URL glob to taint-class mappings (applied to fetch tool arguments)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaintTagRule": {
+      "type": "object",
+      "required": ["match", "add"],
+      "properties": {
+        "match": { "type": "string" },
+        "add": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolsetTaints": {
+      "type": "object",
+      "description": "Per-toolset taint declarations. Reads is the set of classes the toolset's tools are assumed to read from; Writes is the set of classes the toolset's tools are assumed to write to.",
+      "properties": {
+        "reads": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "writes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
     "PermissionsConfig": {
       "type": "object",
       "description": "Tool permission configuration. Controls tool call approval behavior with optional argument matching.",
@@ -989,6 +1103,10 @@
         "working_dir": {
           "type": "string",
           "description": "Optional working directory for the MCP server process. Relative paths are resolved relative to the agent's working directory. Only valid for subprocess-based MCP types (command or ref); not supported for remote MCP toolsets."
+        },
+        "taints": {
+          "$ref": "#/definitions/ToolsetTaints",
+          "description": "Per-toolset taint declarations. See docs/design/taint-tracking.md."
         }
       },
       "anyOf": [
@@ -1233,6 +1351,10 @@
         "working_dir": {
           "type": "string",
           "description": "Optional working directory for MCP/LSP toolset processes. Relative paths are resolved relative to the agent's working directory. Only valid for type 'mcp' or 'lsp', and not supported for remote MCP toolsets (no local subprocess)."
+        },
+        "taints": {
+          "$ref": "#/definitions/ToolsetTaints",
+          "description": "Per-toolset taint declarations. Overrides the built-in classifier defaults so the YAML reader sees the security boundary explicitly. See docs/design/taint-tracking.md."
         }
       },
       "additionalProperties": false,

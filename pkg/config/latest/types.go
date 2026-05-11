@@ -28,6 +28,10 @@ type Config struct {
 	RAG         map[string]RAGToolset     `json:"rag,omitempty"`
 	Metadata    Metadata                  `json:"metadata"`
 	Permissions *PermissionsConfig        `json:"permissions,omitempty"`
+	// Taints declares the information-flow taint vocabulary, the forbid
+	// matrix, and the path/env/url tag tables that drive automatic taint
+	// introduction. See docs/design/taint-tracking.md.
+	Taints *TaintConfig `json:"taints,omitempty" yaml:"taints,omitempty"`
 }
 
 // MCPToolset is a reusable MCP server definition stored in the top-level
@@ -805,6 +809,11 @@ type Toolset struct {
 	// When set, the toolset process is started from this directory.
 	// Relative paths are resolved relative to the agent's working directory.
 	WorkingDir string `json:"working_dir,omitempty"`
+
+	// Taints declares the read/write taint classes for every tool exposed
+	// by this toolset. Overrides the built-in classifier defaults so the
+	// YAML reader sees the security boundary explicitly.
+	Taints *ToolsetTaints `json:"taints,omitempty" yaml:"taints,omitempty"`
 }
 
 func (t *Toolset) UnmarshalYAML(unmarshal func(any) error) error {
